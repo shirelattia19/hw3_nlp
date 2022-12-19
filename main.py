@@ -1,15 +1,9 @@
-# This is a sample Python script.
-
-# Press Maj+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
-import os
+import os.path
 import re
-
-
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
-
+import numpy as np
+from gensim.models import Word2Vec, KeyedVectors
+from gensim import downloader
+import pickle
 
 def preprocess(path):
     sentence_index = 0
@@ -29,34 +23,61 @@ def preprocess(path):
             word_index = line_set[0]
             word = line_set[1]
             word_pos = line_set[3]
-            X_representation = [word_index,word, word_pos]
+            X_representation = [word_index,word, word_pos, tag]
             if len(list_of_sentences_with_tags) <= sentence_index:
-                list_of_sentences_with_tags.append([(X_representation, tag)])
-                list_of_sentences.append([X_representation])
-
+                list_of_sentences_with_tags.append([X_representation])
             else:
-                list_of_sentences_with_tags[sentence_index].append((X_representation, tag))
-                list_of_sentences[sentence_index].append(X_representation)
-    return list_of_sentences, list_of_sentences_with_tags
+                list_of_sentences_with_tags[sentence_index].append(X_representation)
+    list_of_sentences_with_tags = [np.array(sen).T.tolist() for sen in list_of_sentences_with_tags]
+    return list_of_sentences_with_tags
 
 
 
 def create_data(train_path,test_path, com_path):
-    list_of_sentences_train, list_of_sentences_with_tags_train = preprocess(train_path)
-    list_of_sentences_test, list_of_sentences_with_tags_test = preprocess(test_path)
-    list_of_sentences_comp,_ = preprocess(com_path)
-    print("pp")
+    list_of_sentences_with_tags_train = preprocess(train_path)
+    with open(f"train.data", 'wb+') as f:
+        pickle.dump(list_of_sentences_with_tags_train, f)
+    list_of_sentences_with_tags_test = preprocess(test_path)
+    with open(f"test.data", 'wb+') as f:
+        pickle.dump(list_of_sentences_with_tags_test, f)
+    list_of_sentences_comp = preprocess(com_path)
+    with open(f"comp.data", 'wb+') as f:
+        pickle.dump(list_of_sentences_comp, f)
 
 
 
+def pre_embedding():
+    # WORD_2_VEC_PATH = 'word2vec-google-news-300'
+    # google_model = downloader.load(WORD_2_VEC_PATH)
+    # google_model.save("google_word2vec.model")
 
-# Press the green button in the gutter to run the script.
+    with open(f"train.data", 'rb') as f:
+        list_of_sentences_with_tags_train = pickle.load(f)
+    with open(f"test.data", 'rb') as f:
+        list_of_sentences_with_tags_test = pickle.load(f)
+    with open(f"comp.data", 'rb') as f:
+        list_of_sentences_with_tags_comp = pickle.load(f)
+    sentences = [sen[1] for sen in (list_of_sentences_with_tags_train + list_of_sentences_with_tags_test + list_of_sentences_with_tags_comp)]
+    trained_model = Word2Vec(sentences=sentences, vector_size=10, window=2, min_count=1, workers=4, epochs=100, seed=42)
+    trained_model.save("trained_word2vec.model")
+
+def embedding(word):
+    google_word2vec = KeyedVectors.load('google_word2vec.model')
+    trained_word2vec = KeyedVectors.load('trained_word2vec.model')
+    if word in google_word2vec.key_to_index:
+        v_1 = google_word2vec[word]
+    else:
+        v_1 = [0]*300
+    v_2 = trained_word2vec[word]
+    v_3 =
+
+
 if __name__ == '__main__':
-    print_hi('PyCharm')
-    train_path ='train.labeled'
-    test_path = 'test.labeled'
-    com_path = 'comp.unlabeled'
-    create_data(train_path,test_path, com_path)
+    # train_path ='train.labeled'
+    # test_path = 'test.labeled'
+    # com_path = 'comp.unlabeled'
+    # create_data(train_path,test_path, com_path)
+    pre_embedding()
 
 
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
