@@ -1,9 +1,10 @@
 import os.path
 import re
 import numpy as np
-from gensim.models import Word2Vec, KeyedVectors
-from gensim import downloader
+from gensim.models import Word2Vec
 import pickle
+
+
 
 def preprocess(path):
     sentence_index = 0
@@ -18,12 +19,12 @@ def preprocess(path):
             if line[-1:] == "\n":
                 line = line[:-1]
             line_set = re.split(r'\t+', line)
-            #print(line_set)
+            # print(line_set)
             tag = line_set[6]
             word_index = line_set[0]
             word = line_set[1]
             word_pos = line_set[3]
-            X_representation = [word_index,word, word_pos, tag]
+            X_representation = [word_index, word, word_pos, tag]
             if len(list_of_sentences_with_tags) <= sentence_index:
                 list_of_sentences_with_tags.append([X_representation])
             else:
@@ -32,8 +33,7 @@ def preprocess(path):
     return list_of_sentences_with_tags
 
 
-
-def create_data(train_path,test_path, com_path):
+def create_data(train_path, test_path, com_path):
     list_of_sentences_with_tags_train = preprocess(train_path)
     with open(f"train.data", 'wb+') as f:
         pickle.dump(list_of_sentences_with_tags_train, f)
@@ -43,7 +43,6 @@ def create_data(train_path,test_path, com_path):
     list_of_sentences_comp = preprocess(com_path)
     with open(f"comp.data", 'wb+') as f:
         pickle.dump(list_of_sentences_comp, f)
-
 
 
 def pre_embedding():
@@ -57,27 +56,24 @@ def pre_embedding():
         list_of_sentences_with_tags_test = pickle.load(f)
     with open(f"comp.data", 'rb') as f:
         list_of_sentences_with_tags_comp = pickle.load(f)
-    sentences = [sen[1] for sen in (list_of_sentences_with_tags_train + list_of_sentences_with_tags_test + list_of_sentences_with_tags_comp)]
-    trained_model = Word2Vec(sentences=sentences, vector_size=10, window=2, min_count=1, workers=4, epochs=100, seed=42)
+    sentences = [sen[1] for sen in (
+                list_of_sentences_with_tags_train + list_of_sentences_with_tags_test + list_of_sentences_with_tags_comp)]
+    trained_model = Word2Vec(sentences=sentences, vector_size=100, window=2, min_count=1, workers=4, epochs=100,
+                             seed=42)
     trained_model.save("trained_word2vec.model")
 
-def embedding(word):
-    google_word2vec = KeyedVectors.load('google_word2vec.model')
-    trained_word2vec = KeyedVectors.load('trained_word2vec.model')
-    if word in google_word2vec.key_to_index:
-        v_1 = google_word2vec[word]
-    else:
-        v_1 = [0]*300
-    v_2 = trained_word2vec[word]
-    v_3 =
+
+
 
 
 if __name__ == '__main__':
+    # # Preprocess the data files
     # train_path ='train.labeled'
     # test_path = 'test.labeled'
     # com_path = 'comp.unlabeled'
     # create_data(train_path,test_path, com_path)
-    pre_embedding()
+
+    # # Create the embedding models
+    # pre_embedding()
 
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
