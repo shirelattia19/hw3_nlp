@@ -66,9 +66,12 @@ class DependencyParser(nn.Module):
         self.fc2 = nn.Linear(self.hidden_dim2, self.out_dim, bias=True)
         self.dropout = nn.Dropout(alpha)
         self.edge_scorer = Sequential(self.dropout, self.fc1, self.tanh, self.fc2)
-        # self.loss_function =  # Implement the loss function described above
+    def NLLL(self,score_mat,label):
+        out = torch.diag(score_mat[:, label])
+        return -torch.mean(out)
 
-    def forward(self, sentence):
+
+    def forward(self, sentence,labels):
         word_idx_tensor, pos_idx_tensor, true_tree_heads = sentence
 
         # Pass word_idx through their embedding layer
@@ -85,10 +88,10 @@ class DependencyParser(nn.Module):
         score_mat = self.edge_scorer(sentence_hidden_representation)
         print(score_mat.shape)
         # # Calculate the negative log likelihood loss described above
-        # loss = self.loss_function(score_mat, true_tree_heads)
+        loss = self.NLLL(score_mat, labels)
 
         # return loss, score_mat
-        return None, score_mat
+        return loss, score_mat
 
 
 from chu_liu_edmonds import decode_mst
