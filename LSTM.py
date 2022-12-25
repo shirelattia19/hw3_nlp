@@ -1,4 +1,3 @@
-import os.path
 import pickle
 
 import numpy as np
@@ -77,6 +76,10 @@ class DependencyParser(nn.Module):
         self.edge_scorer = Sequential(self.dropout, self.fc1, self.tanh, self.fc2)
         # self.loss_function =  # Implement the loss function described above
 
+    def NLLL(self,score_mat,label):
+        out = torch.diag(score_mat[:, label])
+        return -torch.mean(out)
+
     def forward(self, sentence):
         word_position_tensors, word_idx_tensor, pos_idx_tensor, true_tree_heads = sentence.permute(1, 0, 2)
 
@@ -94,10 +97,10 @@ class DependencyParser(nn.Module):
             return None, score_mat
         else:
             # # Calculate the negative log likelihood loss described above
-            # loss = self.loss_function(score_mat, true_tree_heads)
+            loss = self.NLLL(score_mat, true_tree_heads)
 
             # return loss, score_mat
-            return None, score_mat
+            return loss, score_mat
 
 
 def train(model, data_sets, optimizer, num_epochs: int, hp, batch_size=16):
