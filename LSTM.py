@@ -69,7 +69,7 @@ class DependencyParser(nn.Module):
         self.out_dim = out_dim
         self.tanh = nn.Tanh()
         self.encoder = nn.LSTM(input_size=self.input_dim, hidden_size=self.hidden_dim, num_layers=2, bidirectional=True,
-                               batch_first=True)  # TODO: dropout=self.dropout, batch_first=True ?
+                               batch_first=True)  # TODO: dropout=self.dropout
         self.fc1 = nn.Linear(self.hidden_dim * 2, self.hidden_dim2, bias=True)
         self.fc2 = nn.Linear(self.hidden_dim2, self.out_dim, bias=True)
         self.dropout = nn.Dropout(alpha)
@@ -96,10 +96,8 @@ class DependencyParser(nn.Module):
         if true_tree_heads[0][0].item() == -1:
             return None, score_mat
         else:
-            # # Calculate the negative log likelihood loss described above
+            # Calculate the negative log likelihood loss described above
             loss = self.NLLL(score_mat, true_tree_heads)
-
-            # return loss, score_mat
             return loss, score_mat
 
 
