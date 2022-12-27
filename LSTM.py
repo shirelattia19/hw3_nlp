@@ -50,30 +50,27 @@ class DependencyEmbedding:
             return torch.zeros(self.embedding_dim)
 
     def sentence_embedding(self, word_tensor, pos_tensor):
-        sentences = []
-        for word_sen_tensor, pos_sen_tensor in zip(word_tensor, pos_tensor):
-            sentence_embedding = []
-            for word_idx, pos_idx in zip(word_sen_tensor, pos_sen_tensor):
-                sentence_embedding.append(self.__word_embedding(word_idx.item(), pos_idx.item()))
-            sentences.append(torch.stack(sentence_embedding))
-        return torch.stack(sentences)
+        sentence_embedding = []
+        for word_idx, pos_idx in zip(word_tensor, pos_tensor):
+            sentence_embedding.append(self.__word_embedding(word_idx.item(), pos_idx.item()))
+        return torch.stack(sentence_embedding)
 
 
 class DependencyParser(nn.Module):
-    def __init__(self, hidden_dim, hidden_dim2, out_dim, alpha, i2w):
+    def __init__(self, hidden_dim, hidden_dim2, alpha, i2w):
         super(DependencyParser, self).__init__()
+
         self.word_embedding = DependencyEmbedding('google_word2vec.model', 'trained_word2vec.model', i2w)
         self.input_dim = self.word_embedding.embedding_dim
         self.hidden_dim = hidden_dim
         self.hidden_dim2 = hidden_dim2
-        self.out_dim = out_dim
         self.tanh = nn.Tanh()
         self.encoder = nn.LSTM(input_size=self.input_dim, hidden_size=self.hidden_dim, num_layers=2, bidirectional=True,
                                batch_first=True)  # TODO: dropout=self.dropout
-        self.fc1 = nn.Linear(self.hidden_dim * 2, self.hidden_dim2, bias=True)
-        self.fc2 = nn.Linear(self.hidden_dim2, self.out_dim, bias=True)
         self.dropout = nn.Dropout(alpha)
-        self.edge_scorer = Sequential(self.dropout, self.fc1, self.tanh, self.fc2)
+        self.fc1 = nn.Linear(self.hidden_dim * 2, self.hidden_dim2, bias=True)
+        self.edge_scorer = None
+        self.fc2 = None
         # self.loss_function =  # Implement the loss function described above
 
     def NLLL(self,score_mat,label):
@@ -81,7 +78,11 @@ class DependencyParser(nn.Module):
         return -torch.mean(out)
 
     def forward(self, sentence):
-        word_position_tensors, word_idx_tensor, pos_idx_tensor, true_tree_heads = sentence.permute(1, 0, 2)
+        # Initialization
+        word_position_tensors, word_idx_tensor, pos_idx_tensor, true_tree_heads = torch.squeeze(sentence)
+        out_dim = len(word_position_tensors)
+        self.fc2 = nn.Linear(self.hidden_dim2, out_dim, bias=True)
+        self.edge_scorer = Sequential(self.dropout, self.fc1, self.tanh, self.fc2)
 
         # Pass word_idx through their embedding layer
         sentence_embedded = self.word_embedding.sentence_embedding(word_idx_tensor, pos_idx_tensor)
@@ -92,19 +93,20 @@ class DependencyParser(nn.Module):
 
         # Get score for each possible edge in the parsing graph, construct score matrix
         score_mat = self.edge_scorer(sentence_hidden_representation)
+        mst, _ = decode_mst(score_mat.detach(), out_dim, False)
 
-        if true_tree_heads[0][0].item() == -1:
+        if true_tree_heads[0].item() == -1:
             return None, score_mat
         else:
             # Calculate the negative log likelihood loss described above
-            loss = self.NLLL(score_mat, true_tree_heads)
+            loss = self.NLLL(mst, true_tree_heads)
             return loss, score_mat
 
 
-def train(model, data_sets, optimizer, num_epochs: int, hp, batch_size=16):
+def train(model, data_sets, optimizer, num_epochs: int, hp):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    data_loaders = {"train": DataLoader(data_sets["train"], batch_size=batch_size, shuffle=True),
-                    "test": DataLoader(data_sets["test"], batch_size=batch_size, shuffle=False)}
+    data_loaders = {"train": DataLoader(data_sets["train"], batch_size=1, shuffle=True),
+                    "test": DataLoader(data_sets["test"], batch_size=1, shuffle=False)}
     model.to(device)
     best_uas = 0.0
 

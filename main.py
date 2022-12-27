@@ -11,7 +11,7 @@ from torch.optim import Adam
 from LSTM import DependencyParser, DependencyDataSet, train, cposTable
 
 
-def preprocess(path, w2i, seq_len=None):
+def preprocess(path, w2i):
     sentence_index = 0
     list_of_sentences_with_tags = []
     sentence = []
@@ -19,16 +19,9 @@ def preprocess(path, w2i, seq_len=None):
         for line in f:
             if line == "\n":
                 sentence_index += 1
-                if seq_len is not None:
-                    while len(sentence) < seq_len:
-                        sentence.append(torch.tensor([len(sentence)+1, -1, -1, -1]))
-                    if len(sentence) == seq_len:
-                        list_of_sentences_with_tags.append(torch.stack(sentence))
-                else:
-                    list_of_sentences_with_tags.append(torch.stack(sentence))
+                list_of_sentences_with_tags.append(sentence)
                 sentence = []
                 continue
-
             if line[-1:] == "\n":
                 line = line[:-1]
             line_set = re.split(r'\t+', line)
@@ -37,25 +30,23 @@ def preprocess(path, w2i, seq_len=None):
             word_index = line_set[0]
             word = line_set[1]
             word_pos = line_set[3]
-            X_representation = torch.tensor([int(word_index), w2i[word], cposTable.index(word_pos), int(tag)])
-            if w2i[word] == -1:
-                pass
+            X_representation = np.array([int(word_index), w2i[word], cposTable.index(word_pos), int(tag)])
             sentence.append(X_representation)
-    list_of_sentences_with_tags = torch.stack([torch.tensor(sen).T for sen in list_of_sentences_with_tags])
+    list_of_sentences_with_tags = [np.array(sen).T for sen in list_of_sentences_with_tags]
     return list_of_sentences_with_tags
 
 
-def create_data(train_path, test_path, com_path, w2i, seq_len=None):
-    list_of_sentences_with_tags_train = preprocess(train_path, w2i, seq_len)
-    with open(f"train_{seq_len}.data", 'wb+') as f:
+def create_data(train_path, test_path, com_path, w2i):
+    list_of_sentences_with_tags_train = preprocess(train_path, w2i)
+    with open(f"train.data", 'wb+') as f:
         pickle.dump(list_of_sentences_with_tags_train, f)
 
-    list_of_sentences_with_tags_test = preprocess(test_path, w2i, seq_len)
-    with open(f"test_{seq_len}.data", 'wb+') as f:
+    list_of_sentences_with_tags_test = preprocess(test_path, w2i)
+    with open(f"test.data", 'wb+') as f:
         pickle.dump(list_of_sentences_with_tags_test, f)
 
-    list_of_sentences_comp = preprocess(com_path, w2i, seq_len)
-    with open(f"comp_{seq_len}.data", 'wb+') as f:
+    list_of_sentences_comp = preprocess(com_path, w2i)
+    with open(f"comp.data", 'wb+') as f:
         pickle.dump(list_of_sentences_comp, f)
 
 
@@ -98,7 +89,6 @@ def pre_embedding():
 
 
 if __name__ == '__main__':
-    seq_len = 83
     with open(f"w2i.dict", 'rb') as f:
         w2i = pickle.load(f)
     with open(f"i2w.dict", 'rb') as f:
@@ -108,7 +98,7 @@ if __name__ == '__main__':
     # train_path = f'train.labeled'
     # test_path = f'test.labeled'
     # com_path = f'comp.unlabeled'
-    # create_data(train_path, test_path, com_path, w2i, seq_len)
+    # create_data(train_path, test_path, com_path, w2i)
 
     # # Create the embedding models
     # pre_embedding()
@@ -117,13 +107,11 @@ if __name__ == '__main__':
     # create_w2i_i2w()
 
     # test model
-    train_ds = DependencyDataSet(f"train_{seq_len}.data")
-    test_ds = DependencyDataSet(f"test_{seq_len}.data")
+    train_ds = DependencyDataSet(f"train.data")
+    test_ds = DependencyDataSet(f"test.data")
     datasets = {"train": train_ds, "test": test_ds}
     #
-    hp = dict(num_epochs=100, hidden_dim=125, hidden_dim2=100, alpha=0.25, batch_size=16, lr=0.1)
-    model = DependencyParser(hidden_dim=hp['hidden_dim'], hidden_dim2=hp['hidden_dim2'], out_dim=seq_len,
-                             alpha=hp['alpha'], i2w=i2w)
+    hp = dict(num_epochs=100, hidden_dim=125, hidden_dim2=100, alpha=0.25, lr=0.1)
+    model = DependencyParser(hidden_dim=hp['hidden_dim'], hidden_dim2=hp['hidden_dim2'], alpha=hp['alpha'], i2w=i2w)
     optimizer = Adam(params=model.parameters(), lr=hp['lr'])
-    best_uas = train(model=model, data_sets=datasets, optimizer=optimizer, num_epochs=hp['num_epochs'], hp=hp,
-                     batch_size=hp['batch_size'])
+    best_uas = train(model=model, data_sets=datasets, optimizer=optimizer, num_epochs=hp['num_epochs'], hp=hp)
