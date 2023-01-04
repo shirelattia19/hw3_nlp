@@ -1,3 +1,4 @@
+import os
 import pickle
 
 import numpy as np
@@ -5,7 +6,6 @@ import torch
 from gensim.models import KeyedVectors
 from torch import nn
 from torch.nn import Sequential
-from sklearn.neural_network import MLPRegressor
 from torch.utils.data import Dataset, DataLoader
 from statistics import mean
 
@@ -15,10 +15,13 @@ cposTable = ["PRP$", "VBG", "VBD", "VBN", ",", "''", "VBP", "WDT", "JJ", "WP", "
 
 
 class DependencyDataSet(Dataset):
-    def __init__(self, data_path):
+    def __init__(self, data_path, percentage_of_data=None):
         self.data_path = data_path
         with open(data_path, 'rb') as f:
             self.list_of_sentences = pickle.load(f)
+        if percentage_of_data is not None:
+            index = int(len(self.list_of_sentences)*percentage_of_data)
+            self.list_of_sentences = self.list_of_sentences[0:index]
 
     def __getitem__(self, item):
         return self.list_of_sentences[item]
@@ -59,7 +62,7 @@ class DependencyEmbedding:
 class DependencyParser(nn.Module):
     def __init__(self, hidden_dim, hidden_dim2, alpha, i2w):
         super(DependencyParser, self).__init__()
-
+        self.i2w = i2w
         self.word_embedding = DependencyEmbedding('google_word2vec.model', 'trained_word2vec.model', i2w)
         self.input_dim = self.word_embedding.embedding_dim
         self.hidden_dim = hidden_dim
@@ -73,14 +76,37 @@ class DependencyParser(nn.Module):
         self.fc2 = None
         # self.loss_function =  # Implement the loss function described above
 
-    def NLLL(self,score_mat,label):
-        out = torch.diag(score_mat[:, label])
-        return -torch.mean(out)
+    def NLLLoss(self, score_mat, true_heads, sentence_len):
+        # true heads without root
+        # score mat  avec root row et column
+        # true_heads = true_heads.long()
+        # res = -torch.sum(score_mat[range(true_heads.shape[0]), true_heads.long()]) / true_heads.shape[0]
+        # return res
+        # -torch.sum(torch.log(score_mat)[range(true_heads.shape[0]), true_heads]) / true_heads.shape[0]
+        true_heads = true_heads.long()
+        predicted_scores = score_mat[:, 1:]
+        loss = torch.zeros(1)
+        cross_entropy_loss = nn.CrossEntropyLoss()
+        for modifier_idx in range(sentence_len):
+            edge = predicted_scores[:, modifier_idx].unsqueeze(dim=0)
+            head_idx = modifier_idx + 1
+            true_score = true_heads[modifier_idx:head_idx]
+            cross = cross_entropy_loss(edge, true_score)
+            loss += cross
+        return (1.0 / sentence_len) * loss
 
-    def forward(self, sentence):
+
+    def forward(self, sentence, device):
+        # return value: loss: tensor of 1 with grad, mst: seq_len + (with the -1 of the root)
+
         # Initialization
         word_position_tensors, word_idx_tensor, pos_idx_tensor, true_tree_heads = torch.squeeze(sentence)
-        out_dim = len(word_position_tensors)
+        if len(word_position_tensors.shape) == 0:
+            word_position_tensors = torch.unsqueeze(word_position_tensors, dim=0)
+            word_idx_tensor = torch.unsqueeze(word_idx_tensor, dim=0)
+            pos_idx_tensor = torch.unsqueeze(pos_idx_tensor, dim=0)
+            true_tree_heads = torch.unsqueeze(true_tree_heads, dim=0)
+        out_dim = len(word_position_tensors) + 1
         self.fc2 = nn.Linear(self.hidden_dim2, out_dim, bias=True)
         self.edge_scorer = Sequential(self.dropout, self.fc1, self.tanh, self.fc2)
 
@@ -90,20 +116,24 @@ class DependencyParser(nn.Module):
         # Get Bi-LSTM hidden representation for each word in sentence
         sentence_hidden_representation, _ = self.encoder(sentence_embedded.float())
         sentence_hidden_representation = self.tanh(sentence_hidden_representation)
+        sentence_hidden_representation = torch.cat((torch.zeros((1,sentence_hidden_representation.shape[1])), sentence_hidden_representation))
 
         # Get score for each possible edge in the parsing graph, construct score matrix
         score_mat = self.edge_scorer(sentence_hidden_representation)
-        mst, _ = decode_mst(score_mat.detach(), out_dim, False)
-
+        try:
+            mst, _ = decode_mst(score_mat.detach().to(device), out_dim, False)
+            mst = torch.from_numpy(mst)
+        except:
+            print("prob")
         if true_tree_heads[0].item() == -1:
-            return None, score_mat
+            return None, mst[1:]
         else:
             # Calculate the negative log likelihood loss described above
-            loss = self.NLLL(mst, true_tree_heads)
-            return loss, score_mat
+            loss = self.NLLLoss(score_mat, true_tree_heads, out_dim-1)
+            return loss, mst[1:]
 
 
-def train(model, data_sets, optimizer, num_epochs: int, hp):
+def train(model, data_sets, optimizer, num_epochs: int, grad_step_num, hp):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     data_loaders = {"train": DataLoader(data_sets["train"], batch_size=1, shuffle=True),
                     "test": DataLoader(data_sets["test"], batch_size=1, shuffle=False)}
@@ -125,21 +155,32 @@ def train(model, data_sets, optimizer, num_epochs: int, hp):
             else:
                 model.eval()
 
-            for batch in data_loaders[phase]:
+            for batch_idx, batch in enumerate(data_loaders[phase]):
                 if phase == 'train':
-                    optimizer.zero_grad()
-                    loss, score_mat = model(batch.to(device))
-                    loss.backward()
-                    optimizer.step()
-                    loss_history_train_epoch.append(loss)
 
-                    uas = 0  # TODO: calculate uas
+                    loss, mst = model(batch.to(device), device)
+
+                    if batch_idx % grad_step_num == 0 and batch_idx != 0:
+                        loss.backward()
+                        optimizer.step()
+                        optimizer.zero_grad()
+
+                    loss_history_train_epoch.append(loss)
+                    true_tree = torch.squeeze(batch)[3]
+                    if len(true_tree.shape) == 0:
+                        true_tree = torch.unsqueeze(true_tree, dim=0)
+                    try:
+                        uas = uas_compute(mst, true_tree)
+                    except:
+                        print('tt')
                     uas_train_epoch.append(uas)
                 else:
                     with torch.no_grad():
-                        loss, score_mat = model(batch.to(device))
+                        loss, mst = model(batch.to(device), device)
                         loss_history_valid_epoch.append(loss)
-                        uas = 0  # TODO: calculate
+
+                        true_tree = torch.squeeze(batch)[3]
+                        uas = uas_compute(mst, true_tree)
                         uas_valid_epoch.append(uas)
                         # acc_valid_epoch.append((batch[1] == pred).float().sum()/(pred.shape[0]*pred.shape[1]))
 
@@ -156,11 +197,23 @@ def train(model, data_sets, optimizer, num_epochs: int, hp):
 
                 if epoch_uas_Score_valid > best_uas:
                     best_uas = epoch_uas_Score_valid
-                    with open(os.path.join('checkpoints', str(hp), f'model_{best_uas}.pkl'), 'wb') as f:
-                        torch.save(model, f)
+                    # checkpoint_path = os.path.join('checkpoints', '_'.join([f"{key}_{value}" for (key, value) in hp.items()]))
+                    # os.makedirs(checkpoint_path)
+                    # with open(os.path.join(checkpoint_path, f'model_{best_uas}.pkl'), 'wb') as f:
+                    #     torch.save(model, f)
 
     print(f'Best Validation uas score: {best_uas:4f}')
     return best_uas
+
+
+def uas_compute(mst, true_tree):
+    res = torch.eq(mst, true_tree)
+    res = torch.sum(res)
+    if len(mst) != 1:
+        res = (res.item() / (len(mst) - 1))
+    else:
+        res = res.item()
+    return res * 100
 
 
 def predict(model, comp_dataset, batch_size, test_path, output_path):

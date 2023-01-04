@@ -8,10 +8,10 @@ import torch
 
 from torch.optim import Adam
 
-from LSTM import DependencyParser, DependencyDataSet, train, cposTable
+from LSTM import DependencyParser, DependencyDataSet, train, cposTable, DependencyEmbedding
 
 
-def preprocess(path, w2i):
+def preprocess(path, w2i, word_embedding):
     sentence_index = 0
     list_of_sentences_with_tags = []
     sentence = []
@@ -36,16 +36,18 @@ def preprocess(path, w2i):
     return list_of_sentences_with_tags
 
 
-def create_data(train_path, test_path, com_path, w2i):
-    list_of_sentences_with_tags_train = preprocess(train_path, w2i)
+def create_data(train_path, test_path, com_path, w2i, i2w):
+    word_embedding = DependencyEmbedding('google_word2vec.model', 'trained_word2vec.model', i2w)
+
+    list_of_sentences_with_tags_train = preprocess(train_path, w2i, word_embedding)
     with open(f"train.data", 'wb+') as f:
         pickle.dump(list_of_sentences_with_tags_train, f)
 
-    list_of_sentences_with_tags_test = preprocess(test_path, w2i)
+    list_of_sentences_with_tags_test = preprocess(test_path, w2i, word_embedding)
     with open(f"test.data", 'wb+') as f:
         pickle.dump(list_of_sentences_with_tags_test, f)
 
-    list_of_sentences_comp = preprocess(com_path, w2i)
+    list_of_sentences_comp = preprocess(com_path, w2i, word_embedding)
     with open(f"comp.data", 'wb+') as f:
         pickle.dump(list_of_sentences_comp, f)
 
@@ -94,11 +96,11 @@ if __name__ == '__main__':
     with open(f"i2w.dict", 'rb') as f:
         i2w = pickle.load(f)
 
-    # # Preprocess the data files
-    # train_path = f'train.labeled'
-    # test_path = f'test.labeled'
-    # com_path = f'comp.unlabeled'
-    # create_data(train_path, test_path, com_path, w2i)
+    # Preprocess the data files
+    train_path = f'train.labeled'
+    test_path = f'test.labeled'
+    com_path = f'comp.unlabeled'
+    create_data(train_path, test_path, com_path, w2i, i2w)
 
     # # Create the embedding models
     # pre_embedding()
@@ -107,11 +109,14 @@ if __name__ == '__main__':
     # create_w2i_i2w()
 
     # test model
-    train_ds = DependencyDataSet(f"train.data")
-    test_ds = DependencyDataSet(f"test.data")
+    hp = dict(num_epochs=100, hidden_dim=125, hidden_dim2=100, alpha=0.25, lr=0.1, grad_step_num=5,
+              percentage_of_data=0.1)
+
+    train_ds = DependencyDataSet(f"train.data", hp['percentage_of_data'])
+    test_ds = DependencyDataSet(f"test.data", hp['percentage_of_data'])
     datasets = {"train": train_ds, "test": test_ds}
     #
-    hp = dict(num_epochs=100, hidden_dim=125, hidden_dim2=100, alpha=0.25, lr=0.1)
     model = DependencyParser(hidden_dim=hp['hidden_dim'], hidden_dim2=hp['hidden_dim2'], alpha=hp['alpha'], i2w=i2w)
     optimizer = Adam(params=model.parameters(), lr=hp['lr'])
-    best_uas = train(model=model, data_sets=datasets, optimizer=optimizer, num_epochs=hp['num_epochs'], hp=hp)
+    best_uas = train(model=model, data_sets=datasets, optimizer=optimizer, num_epochs=hp['num_epochs'],
+                     grad_step_num=hp["grad_step_num"], hp=hp)
