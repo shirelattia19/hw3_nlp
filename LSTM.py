@@ -160,11 +160,8 @@ class DependencyParser(nn.Module):
         # score_mat = self.edge_scorer(sentence_hidden_representation)
         score_mat = self.run_edge_scorer(sentence_hidden_representation, out_dim)
 
-        try:
-            mst, _ = decode_mst(score_mat.detach().to(device), out_dim, False)
-            mst = torch.from_numpy(mst)
-        except:
-            print("prob")
+        mst, _ = decode_mst(score_mat.cpu().detach().to(device), out_dim, False)
+        mst = torch.from_numpy(mst)
         if true_tree_heads[0].item() == -1:
             return None, mst[1:]
         else:
