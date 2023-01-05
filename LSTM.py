@@ -8,6 +8,7 @@ from torch import nn
 from torch.nn import Sequential
 from torch.utils.data import Dataset, DataLoader
 from statistics import mean
+from chu_liu_edmonds import decode_mst
 
 cposTable = ["PRP$", "VBG", "VBD", "VBN", ",", "''", "VBP", "WDT", "JJ", "WP", "VBZ", "DT", "#", "RP", "$", "NN", ")",
              "(", "FW", "POS", ".", "TO", "PRP", "RB", ":", "NNS", "NNP", "``", "WRB", "CC", "LS", "PDT", "RBS", "RBR",
@@ -93,22 +94,22 @@ class DependencyParser(nn.Module):
 
     def NLLLoss(self, score_mat, true_heads, sentence_len, device):
         # true heads without root
-        # score mat  avec root row et column
-        # true_heads = true_heads.long()
-        # res = -torch.sum(score_mat[range(true_heads.shape[0]), true_heads.long()]) / true_heads.shape[0]
-        # return res
+        # score mat  with root row et column
+        score_mat = score_mat[:, 1:]
+        res = -torch.sum(score_mat[range(true_heads.shape[0]), true_heads.long()]) / true_heads.shape[0]
+        return res
         # -torch.sum(torch.log(score_mat)[range(true_heads.shape[0]), true_heads]) / true_heads.shape[0]
-        true_heads = true_heads.long()
-        predicted_scores = score_mat[:, 1:]
-        loss = torch.zeros(1, device=device)
-        cross_entropy_loss = nn.CrossEntropyLoss()
-        for modifier_idx in range(sentence_len):
-            edge = predicted_scores[:, modifier_idx].unsqueeze(dim=0)
-            head_idx = modifier_idx + 1
-            true_score = true_heads[modifier_idx:head_idx]
-            cross = cross_entropy_loss(edge, true_score)
-            loss += cross
-        return (1.0 / sentence_len) * loss
+        # true_heads = true_heads.long()
+        # predicted_scores = score_mat[:, 1:]
+        # loss = torch.zeros(1, device=device)
+        # cross_entropy_loss = nn.CrossEntropyLoss()
+        # for modifier_idx in range(sentence_len):
+        #     edge = predicted_scores[:, modifier_idx].unsqueeze(dim=0)
+        #     head_idx = modifier_idx + 1
+        #     true_score = true_heads[modifier_idx:head_idx]
+        #     cross = cross_entropy_loss(edge, true_score)
+        #     loss += cross
+        # return (1.0 / sentence_len) * loss
 
     def run_edge_scorer(self, lstm_output, sentence_len):
         lstm_output = lstm_output.squeeze()
@@ -132,22 +133,26 @@ class DependencyParser(nn.Module):
                     words_as_heads[head_idx] + words_as_modifiers[modifier_idx])
         return score_matrix
 
-    def forward(self, sentence, device):
+    def forward(self, sentence_embedded,true_tree_heads,  device):
         # return value: loss: tensor of 1 with grad, mst: seq_len + (with the -1 of the root)
 
         # Initialization
-        word_position_tensors, word_idx_tensor, pos_idx_tensor, true_tree_heads = torch.squeeze(sentence)
-        if len(word_position_tensors.shape) == 0:
-            word_position_tensors = torch.unsqueeze(word_position_tensors, dim=0)
-            word_idx_tensor = torch.unsqueeze(word_idx_tensor, dim=0)
-            pos_idx_tensor = torch.unsqueeze(pos_idx_tensor, dim=0)
-            true_tree_heads = torch.unsqueeze(true_tree_heads, dim=0)
-        out_dim = len(word_position_tensors) + 1
-        # self.fc2 = nn.Linear(self.hidden_dim2, out_dim, bias=True)
-        # self.edge_scorer = Sequential(self.dropout, self.fc1, self.tanh, self.fc2)
-
-        # Pass word_idx through their embedding layer
-        sentence_embedded = self.word_embedding.sentence_embedding(word_idx_tensor, pos_idx_tensor)
+        sentence_embedded = torch.squeeze(sentence_embedded)
+        true_tree_heads = torch.squeeze(true_tree_heads)
+        # word_position_tensors, word_idx_tensor, pos_idx_tensor, true_tree_heads = torch.squeeze(sentence)
+        # if len(word_position_tensors.shape) == 0:
+        #     word_position_tensors = torch.unsqueeze(word_position_tensors, dim=0)
+        #     word_idx_tensor = torch.unsqueeze(word_idx_tensor, dim=0)
+        #     pos_idx_tensor = torch.unsqueeze(pos_idx_tensor, dim=0)
+        #     true_tree_heads = torch.unsqueeze(true_tree_heads, dim=0)
+        # out_dim = len(word_position_tensors) + 1
+        # # self.fc2 = nn.Linear(self.hidden_dim2, out_dim, bias=True)
+        # # self.edge_scorer = Sequential(self.dropout, self.fc1, self.tanh, self.fc2)
+        #
+        # # Pass word_idx through their embedding layer
+        # sentence_embedded = self.word_embedding.sentence_embedding(word_idx_tensor, pos_idx_tensor)
+        #
+        out_dim = len(true_tree_heads) + 1
 
         # Get Bi-LSTM hidden representation for each word in sentence
         sentence_hidden_representation, _ = self.encoder(sentence_embedded.float().to(device))
@@ -197,7 +202,7 @@ def train(model, data_sets, optimizer, num_epochs: int, grad_step_num, hp):
                     if batch_idx % grad_step_num == 0 and batch_idx != 0:
                         optimizer.zero_grad()
 
-                    loss, mst = model(batch.to(device), device)
+                    loss, mst = model(batch[0].to(device), batch[1].to(device), device)
                     loss = loss / grad_step_num
                     loss.backward()
 
@@ -205,20 +210,17 @@ def train(model, data_sets, optimizer, num_epochs: int, grad_step_num, hp):
                         optimizer.step()
 
                     loss_history_train_epoch.append(loss)
-                    true_tree = torch.squeeze(batch)[3]
+                    true_tree = torch.squeeze(batch[1])
                     if len(true_tree.shape) == 0:
                         true_tree = torch.unsqueeze(true_tree, dim=0)
-                    try:
-                        uas = uas_compute(mst, true_tree)
-                    except:
-                        print('tt')
+                    uas = uas_compute(mst, true_tree)
                     uas_train_epoch.append(uas)
                 else:
                     with torch.no_grad():
-                        loss, mst = model(batch.to(device), device)
+                        loss, mst = model(batch[0].to(device), batch[1].to(device), device)
                         loss_history_valid_epoch.append(loss)
 
-                        true_tree = torch.squeeze(batch)[3]
+                        true_tree = torch.squeeze(batch[1])
                         uas = uas_compute(mst, true_tree)
                         uas_valid_epoch.append(uas)
                         # acc_valid_epoch.append((batch[1] == pred).float().sum()/(pred.shape[0]*pred.shape[1]))
@@ -236,10 +238,11 @@ def train(model, data_sets, optimizer, num_epochs: int, grad_step_num, hp):
 
                 if epoch_uas_Score_valid > best_uas:
                     best_uas = epoch_uas_Score_valid
-                    # checkpoint_path = os.path.join('checkpoints', '_'.join([f"{key}_{value}" for (key, value) in hp.items()]))
-                    # os.makedirs(checkpoint_path)
-                    # with open(os.path.join(checkpoint_path, f'model_{best_uas}.pkl'), 'wb') as f:
-                    #     torch.save(model, f)
+                    if epoch_uas_Score_valid > 70:
+                        checkpoint_path = os.path.join('checkpoints', '_'.join([f"{key}_{value}" for (key, value) in hp.items()]))
+                        os.makedirs(checkpoint_path)
+                        with open(os.path.join(checkpoint_path, f'model_{best_uas}.pkl'), 'wb') as f:
+                            torch.save(model, f)
 
     print(f'Best Validation uas score: {best_uas:4f}')
     return best_uas
@@ -270,10 +273,4 @@ def predict(model, comp_dataset, batch_size, test_path, output_path):
     # writes_tagged_test(pred, test_path, output_path)
 
 
-from chu_liu_edmonds import decode_mst
 
-
-def eval_model(model, sentence):
-    _, score_mat = model(sentence)
-    predicted_tree = decode_mst(score_mat)
-    return predicted_tree
