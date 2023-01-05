@@ -30,7 +30,11 @@ def preprocess(path, w2i, word_embedding):
             word_index = line_set[0]
             word = line_set[1]
             word_pos = line_set[3]
-            X_representation = np.array([int(word_index), w2i[word], cposTable.index(word_pos), int(tag)])
+            word_idx = w2i[word]
+            pos_idx = cposTable.index(word_pos)
+            sentence_embedded = word_embedding.word_embedding(word_idx, pos_idx)
+            X_representation = np.array([sentence_embedded, int(tag)])
+            #X_representation = np.array([int(word_index), w2i[word], cposTable.index(word_pos), int(tag)])
             sentence.append(X_representation)
     list_of_sentences_with_tags = [np.array(sen).T for sen in list_of_sentences_with_tags]
     return list_of_sentences_with_tags
@@ -97,10 +101,10 @@ if __name__ == '__main__':
         i2w = pickle.load(f)
 
     # Preprocess the data files
-    train_path = f'train.labeled'
-    test_path = f'test.labeled'
-    com_path = f'comp.unlabeled'
-    create_data(train_path, test_path, com_path, w2i, i2w)
+    # train_path = f'train.labeled'
+    # test_path = f'test.labeled'
+    # com_path = f'comp.unlabeled'
+    # create_data(train_path, test_path, com_path, w2i, i2w)
 
     # # Create the embedding models
     # pre_embedding()
@@ -109,8 +113,8 @@ if __name__ == '__main__':
     # create_w2i_i2w()
 
     # test model
-    hp = dict(num_epochs=100, hidden_dim=125, hidden_dim2=100, alpha=0.25, lr=0.1, grad_step_num=5,
-              percentage_of_data=0.1)
+    hp = dict(num_epochs=100, hidden_dim=256, hidden_dim2=128, alpha=0.25, lr=0.004, grad_step_num=130,
+              percentage_of_data=1)
 
     train_ds = DependencyDataSet(f"train.data", hp['percentage_of_data'])
     test_ds = DependencyDataSet(f"test.data", hp['percentage_of_data'])

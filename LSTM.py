@@ -20,7 +20,7 @@ class DependencyDataSet(Dataset):
         with open(data_path, 'rb') as f:
             self.list_of_sentences = pickle.load(f)
         if percentage_of_data is not None:
-            index = int(len(self.list_of_sentences)*percentage_of_data)
+            index = int(len(self.list_of_sentences) * percentage_of_data)
             self.list_of_sentences = self.list_of_sentences[0:index]
 
     def __getitem__(self, item):
@@ -38,7 +38,7 @@ class DependencyEmbedding:
         self.embedding_dim = self.google_word2vec.vector_size + self.trained_word2vec.wv.vector_size + len(cposTable)
         self.i2w = i2w
 
-    def __word_embedding(self, word_idx, pos_idx):
+    def word_embedding(self, word_idx, pos_idx):
         if pos_idx != -1:
             word = self.i2w[word_idx]
             if word in self.google_word2vec.key_to_index:
@@ -55,7 +55,7 @@ class DependencyEmbedding:
     def sentence_embedding(self, word_tensor, pos_tensor):
         sentence_embedding = []
         for word_idx, pos_idx in zip(word_tensor, pos_tensor):
-            sentence_embedding.append(self.__word_embedding(word_idx.item(), pos_idx.item()))
+            sentence_embedding.append(self.word_embedding(word_idx.item(), pos_idx.item()))
         return torch.stack(sentence_embedding)
 
 
@@ -68,15 +68,30 @@ class DependencyParser(nn.Module):
         self.hidden_dim = hidden_dim
         self.hidden_dim2 = hidden_dim2
         self.tanh = nn.Tanh()
-        self.encoder = nn.LSTM(input_size=self.input_dim, hidden_size=self.hidden_dim, num_layers=2, bidirectional=True,
-                               batch_first=True)  # TODO: dropout=self.dropout
         self.dropout = nn.Dropout(alpha)
-        self.fc1 = nn.Linear(self.hidden_dim * 2, self.hidden_dim2, bias=True)
-        self.edge_scorer = None
-        self.fc2 = None
+        self.encoder = nn.LSTM(input_size=self.input_dim, hidden_size=self.hidden_dim, num_layers=2, bidirectional=True,
+                               batch_first=True, dropout=alpha)
+        self.encoder_2 = nn.LSTM(self.hidden_dim * 2, self.hidden_dim, num_layers=2, bidirectional=True,
+                                 dropout=alpha, batch_first=True)
+
+        # self.fc1 = nn.Linear(self.hidden_dim * 2, self.hidden_dim2, bias=True)
+        # self.edge_scorer = None
+        # self.fc2 = None
+        # Implement a sub-module to calculate the scores for all possible edges in sentence dependency graph
+        self.mlp_heads = nn.Sequential(
+            nn.Linear(2 * self.hidden_dim, self.hidden_dim2)
+        )
+        self.mlp_modifiers = nn.Sequential(
+            nn.Linear(2 * self.hidden_dim, self.hidden_dim2)
+        )
+
+        self.edge_scorer = nn.Sequential(
+            nn.Tanh(),
+            nn.Linear(self.hidden_dim2, 1)
+        )
         # self.loss_function =  # Implement the loss function described above
 
-    def NLLLoss(self, score_mat, true_heads, sentence_len):
+    def NLLLoss(self, score_mat, true_heads, sentence_len, device):
         # true heads without root
         # score mat  avec root row et column
         # true_heads = true_heads.long()
@@ -85,7 +100,7 @@ class DependencyParser(nn.Module):
         # -torch.sum(torch.log(score_mat)[range(true_heads.shape[0]), true_heads]) / true_heads.shape[0]
         true_heads = true_heads.long()
         predicted_scores = score_mat[:, 1:]
-        loss = torch.zeros(1)
+        loss = torch.zeros(1, device=device)
         cross_entropy_loss = nn.CrossEntropyLoss()
         for modifier_idx in range(sentence_len):
             edge = predicted_scores[:, modifier_idx].unsqueeze(dim=0)
@@ -95,6 +110,27 @@ class DependencyParser(nn.Module):
             loss += cross
         return (1.0 / sentence_len) * loss
 
+    def run_edge_scorer(self, lstm_output, sentence_len):
+        lstm_output = lstm_output.squeeze()
+
+        # Get score for each possible edge in the parsing graph, construct score matrix
+        score_matrix = torch.FloatTensor(sentence_len, sentence_len)
+
+        # run over all of the heads with the MLP_head
+        words_as_heads = self.mlp_heads(lstm_output)
+        # run over all of the heads with the MLP_modifier
+        words_as_modifiers = self.mlp_modifiers(lstm_output)
+
+        # loop over heads
+        for head_idx in range(sentence_len):
+            # loop over modifiers
+            for modifier_idx in range(sentence_len):
+                if head_idx == modifier_idx:
+                    score_matrix[head_idx][modifier_idx] = 0
+                    continue
+                score_matrix[head_idx][modifier_idx] = self.edge_scorer(
+                    words_as_heads[head_idx] + words_as_modifiers[modifier_idx])
+        return score_matrix
 
     def forward(self, sentence, device):
         # return value: loss: tensor of 1 with grad, mst: seq_len + (with the -1 of the root)
@@ -107,19 +143,23 @@ class DependencyParser(nn.Module):
             pos_idx_tensor = torch.unsqueeze(pos_idx_tensor, dim=0)
             true_tree_heads = torch.unsqueeze(true_tree_heads, dim=0)
         out_dim = len(word_position_tensors) + 1
-        self.fc2 = nn.Linear(self.hidden_dim2, out_dim, bias=True)
-        self.edge_scorer = Sequential(self.dropout, self.fc1, self.tanh, self.fc2)
+        # self.fc2 = nn.Linear(self.hidden_dim2, out_dim, bias=True)
+        # self.edge_scorer = Sequential(self.dropout, self.fc1, self.tanh, self.fc2)
 
         # Pass word_idx through their embedding layer
         sentence_embedded = self.word_embedding.sentence_embedding(word_idx_tensor, pos_idx_tensor)
 
         # Get Bi-LSTM hidden representation for each word in sentence
-        sentence_hidden_representation, _ = self.encoder(sentence_embedded.float())
-        sentence_hidden_representation = self.tanh(sentence_hidden_representation)
-        sentence_hidden_representation = torch.cat((torch.zeros((1,sentence_hidden_representation.shape[1])), sentence_hidden_representation))
+        sentence_hidden_representation, _ = self.encoder(sentence_embedded.float().to(device))
+        #sentence_hidden_representation = self.tanh(sentence_hidden_representation)
+        sentence_hidden_representation, _ = self.encoder_2(sentence_hidden_representation.to(device))
+        sentence_hidden_representation = torch.cat(
+            (torch.zeros((1, sentence_hidden_representation.shape[1]), device=device), sentence_hidden_representation))
 
         # Get score for each possible edge in the parsing graph, construct score matrix
-        score_mat = self.edge_scorer(sentence_hidden_representation)
+        # score_mat = self.edge_scorer(sentence_hidden_representation)
+        score_mat = self.run_edge_scorer(sentence_hidden_representation, out_dim)
+
         try:
             mst, _ = decode_mst(score_mat.detach().to(device), out_dim, False)
             mst = torch.from_numpy(mst)
@@ -129,7 +169,7 @@ class DependencyParser(nn.Module):
             return None, mst[1:]
         else:
             # Calculate the negative log likelihood loss described above
-            loss = self.NLLLoss(score_mat, true_tree_heads, out_dim-1)
+            loss = self.NLLLoss(score_mat.to(device), true_tree_heads.to(device), out_dim - 1, device)
             return loss, mst[1:]
 
 
@@ -157,13 +197,15 @@ def train(model, data_sets, optimizer, num_epochs: int, grad_step_num, hp):
 
             for batch_idx, batch in enumerate(data_loaders[phase]):
                 if phase == 'train':
+                    if batch_idx % grad_step_num == 0 and batch_idx != 0:
+                        optimizer.zero_grad()
 
                     loss, mst = model(batch.to(device), device)
+                    loss = loss / grad_step_num
+                    loss.backward()
 
                     if batch_idx % grad_step_num == 0 and batch_idx != 0:
-                        loss.backward()
                         optimizer.step()
-                        optimizer.zero_grad()
 
                     loss_history_train_epoch.append(loss)
                     true_tree = torch.squeeze(batch)[3]
