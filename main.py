@@ -153,7 +153,7 @@ if __name__ == '__main__':
 
 
     # 5- train model
-    hp = dict(num_epochs=25, hidden_dim=256, hidden_dim2=128, alpha=0.25, lr=0.004, grad_step_num=125,
+    hp = dict(num_epochs=25, hidden_dim=256, hidden_dim2=128, alpha=0.25, lr=0.004, grad_step_num=135,
               percentage_of_data=1)
 
     train_ds = DependencyDataSet(f"train.emb", hp['percentage_of_data'])

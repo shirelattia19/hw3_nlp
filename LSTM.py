@@ -256,13 +256,22 @@ def train(model, data_sets, optimizer, num_epochs: int, grad_step_num, hp):
 
                 if epoch_uas_Score_valid > best_uas:
                     best_uas = epoch_uas_Score_valid
-                    if epoch_uas_Score_valid > 70:
+                    if epoch_uas_Score_valid > 2:
                         with open(os.path.join(checkpoint_path, f'model_{best_uas}.pkl'), 'wb') as f:
-                            torch.save(model, f)
-    with open(os.path.join(checkpoint_path, f'uas_{best_uas}.pkl'), 'wb') as f:
-        torch.save(valid_uas, f)
-    with open(os.path.join(checkpoint_path, f'loss_{best_uas}.pkl'), 'wb') as f:
-        torch.save(valid_loss, f)
+                            # torch.save(model, f)
+                            try:
+                                torch.save(model, f, pickle_protocol=4)
+                            except:
+                                print("cannot save model")
+                                pickle.dump(model, f, protocol=4)
+
+    try:
+        with open(os.path.join(checkpoint_path, f'uas_{best_uas}.pkl'), 'wb') as f:
+            torch.save(valid_uas, f)
+        with open(os.path.join(checkpoint_path, f'loss_{best_uas}.pkl'), 'wb') as f:
+            torch.save(valid_loss, f)
+    except:
+        print("pb")
 
     print(f'Best Validation uas score: {best_uas:4f}')
     return best_uas
@@ -277,20 +286,6 @@ def uas_compute(mst, true_tree):
         res = res.item()
     return res * 100
 
-
-def predict(model, comp_dataset, batch_size, test_path, output_path):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    data_loader = DataLoader(comp_dataset, batch_size=batch_size, shuffle=False)
-    model.eval()
-    pred = []
-    for batch in data_loader:
-        _, score_mat = model(batch.to(device))
-        # pred_batch = ????
-        # pred.append(pred_batch)
-    pred = torch.cat(pred)
-
-    # Create the tagged file from untagged
-    # writes_tagged_test(pred, test_path, output_path)
 
 
 
