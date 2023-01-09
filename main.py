@@ -153,13 +153,20 @@ if __name__ == '__main__':
 
 
     # 5- train model
-    hp = dict(num_epochs=100, hidden_dim=256, hidden_dim2=128, alpha=0.25, lr=0.004, grad_step_num=130,
+    hp = dict(num_epochs=25, hidden_dim=256, hidden_dim2=128, alpha=0.25, lr=0.004, grad_step_num=125,
               percentage_of_data=1)
 
     train_ds = DependencyDataSet(f"train.emb", hp['percentage_of_data'])
     test_ds = DependencyDataSet(f"test.emb", hp['percentage_of_data'])
     datasets = {"train": train_ds, "test": test_ds}
     #
+    model = DependencyParser(hidden_dim=hp['hidden_dim'], hidden_dim2=hp['hidden_dim2'], alpha=hp['alpha'], i2w=i2w)
+    optimizer = Adam(params=model.parameters(), lr=hp['lr'])
+    best_uas = train(model=model, data_sets=datasets, optimizer=optimizer, num_epochs=hp['num_epochs'],
+                     grad_step_num=hp["grad_step_num"], hp=hp)
+
+    hp = dict(num_epochs=20, hidden_dim=125, hidden_dim2=100, alpha=0.25, lr=0.01, grad_step_num=100,
+              percentage_of_data=1)
     model = DependencyParser(hidden_dim=hp['hidden_dim'], hidden_dim2=hp['hidden_dim2'], alpha=hp['alpha'], i2w=i2w)
     optimizer = Adam(params=model.parameters(), lr=hp['lr'])
     best_uas = train(model=model, data_sets=datasets, optimizer=optimizer, num_epochs=hp['num_epochs'],

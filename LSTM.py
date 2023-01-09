@@ -16,13 +16,12 @@ cposTable = ["PRP$", "VBG", "VBD", "VBN", ",", "''", "VBP", "WDT", "JJ", "WP", "
 
 
 class DependencyDataSet(Dataset):
-    def __init__(self, data_path, percentage_of_data=None):
+    def __init__(self, data_path, percentage_of_data=1):
         self.data_path = data_path
         with open(data_path, 'rb') as f:
             self.list_of_sentences = pickle.load(f)
-        if percentage_of_data is not None:
-            index = int(len(self.list_of_sentences) * percentage_of_data)
-            self.list_of_sentences = self.list_of_sentences[0:index]
+        index = int(len(self.list_of_sentences) * percentage_of_data)
+        self.list_of_sentences = self.list_of_sentences[0:index]
 
     def __getitem__(self, item):
         return self.list_of_sentences[item]
@@ -95,21 +94,26 @@ class DependencyParser(nn.Module):
     def NLLLoss(self, score_mat, true_heads, sentence_len, device):
         # true heads without root
         # score mat  with root row et column
-        score_mat = score_mat[:, 1:]
-        res = -torch.sum(score_mat[range(true_heads.shape[0]), true_heads.long()]) / true_heads.shape[0]
-        return res
-        # -torch.sum(torch.log(score_mat)[range(true_heads.shape[0]), true_heads]) / true_heads.shape[0]
-        # true_heads = true_heads.long()
         # predicted_scores = score_mat[:, 1:]
-        # loss = torch.zeros(1, device=device)
-        # cross_entropy_loss = nn.CrossEntropyLoss()
-        # for modifier_idx in range(sentence_len):
-        #     edge = predicted_scores[:, modifier_idx].unsqueeze(dim=0)
-        #     head_idx = modifier_idx + 1
-        #     true_score = true_heads[modifier_idx:head_idx]
-        #     cross = cross_entropy_loss(edge, true_score)
-        #     loss += cross
-        # return (1.0 / sentence_len) * loss
+        # out = torch.diag(predicted_scores[:, true_heads.long()])
+        # return -torch.mean(out)
+        #
+        #
+        # # predicted_scores = score_mat[:, 1:]
+        # # predicted_scores.to(device)
+        # # res = -torch.sum(predicted_scores[range(true_heads.shape[0]), true_heads.long()]) / true_heads.shape[0]
+        # # return res
+        #
+        # # -torch.sum(torch.log(score_mat)[range(true_heads.shape[0]), true_heads]) / true_heads.shape[0]
+        true_heads = true_heads.long()
+        score_mat = score_mat[:, 1:]
+        loss = torch.zeros(1, device=device)
+        cross_entropy_loss = nn.CrossEntropyLoss()
+        for modifier_idx in range(sentence_len):
+            edge = score_mat[:, modifier_idx].unsqueeze(dim=0)
+            true_score = true_heads[modifier_idx:modifier_idx + 1]
+            loss += cross_entropy_loss(edge, true_score)
+        return loss / sentence_len
 
     def run_edge_scorer(self, lstm_output, sentence_len):
         lstm_output = lstm_output.squeeze()
@@ -133,7 +137,7 @@ class DependencyParser(nn.Module):
                     words_as_heads[head_idx] + words_as_modifiers[modifier_idx])
         return score_matrix
 
-    def forward(self, sentence_embedded,true_tree_heads,  device):
+    def forward(self, sentence_embedded, true_tree_heads,  device):
         # return value: loss: tensor of 1 with grad, mst: seq_len + (with the -1 of the root)
 
         # Initialization
@@ -152,12 +156,17 @@ class DependencyParser(nn.Module):
         # # Pass word_idx through their embedding layer
         # sentence_embedded = self.word_embedding.sentence_embedding(word_idx_tensor, pos_idx_tensor)
         #
-        out_dim = len(true_tree_heads) + 1
+        try:
+            out_dim = len(true_tree_heads) + 1
+        except:
+            sentence_embedded = torch.unsqueeze(sentence_embedded, dim=0)
+            true_tree_heads = torch.unsqueeze(true_tree_heads, dim=0)
+            out_dim = 2
 
         # Get Bi-LSTM hidden representation for each word in sentence
         sentence_hidden_representation, _ = self.encoder(sentence_embedded.float().to(device))
-        #sentence_hidden_representation = self.tanh(sentence_hidden_representation)
         sentence_hidden_representation, _ = self.encoder_2(sentence_hidden_representation.to(device))
+        #sentence_hidden_representation = self.tanh(sentence_hidden_representation)
         sentence_hidden_representation = torch.cat(
             (torch.zeros((1, sentence_hidden_representation.shape[1]), device=device), sentence_hidden_representation))
 
@@ -181,6 +190,13 @@ def train(model, data_sets, optimizer, num_epochs: int, grad_step_num, hp):
                     "test": DataLoader(data_sets["test"], batch_size=1, shuffle=False)}
     model.to(device)
     best_uas = 0.0
+    checkpoint_path = os.path.join('checkpoints', '_'.join([f"{key}_{value}" for (key, value) in hp.items()]))
+    try:
+        os.makedirs(checkpoint_path)
+    except:
+        print("dir exists :)")
+    valid_uas = []
+    valid_loss = []
 
     for epoch in range(num_epochs):
         print(f'Epoch {epoch + 1}/{num_epochs}')
@@ -235,14 +251,18 @@ def train(model, data_sets, optimizer, num_epochs: int, grad_step_num, hp):
                 # epoch_acc_valid = torch.mean(torch.stack(acc_valid_epoch))
                 print(f'{phase.title()} Valid Loss: {epoch_loss_valid:.4e} Valid uas score: {epoch_uas_Score_valid} ')
                 # f'Valid acc: {epoch_acc_valid}')
+                valid_loss.append(epoch_loss_valid)
+                valid_uas.append(epoch_uas_Score_valid)
 
                 if epoch_uas_Score_valid > best_uas:
                     best_uas = epoch_uas_Score_valid
                     if epoch_uas_Score_valid > 70:
-                        checkpoint_path = os.path.join('checkpoints', '_'.join([f"{key}_{value}" for (key, value) in hp.items()]))
-                        os.makedirs(checkpoint_path)
                         with open(os.path.join(checkpoint_path, f'model_{best_uas}.pkl'), 'wb') as f:
                             torch.save(model, f)
+    with open(os.path.join(checkpoint_path, f'uas_{best_uas}.pkl'), 'wb') as f:
+        torch.save(valid_uas, f)
+    with open(os.path.join(checkpoint_path, f'loss_{best_uas}.pkl'), 'wb') as f:
+        torch.save(valid_loss, f)
 
     print(f'Best Validation uas score: {best_uas:4f}')
     return best_uas
